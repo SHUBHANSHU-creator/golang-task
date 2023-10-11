@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -13,6 +14,10 @@ var (
 	data  = make(map[string]Item)
 	mutex sync.RWMutex
 )
+
+type Command struct {
+	Command string `json:"command"`
+}
 
 type Item struct {
 	Value      string
@@ -32,7 +37,18 @@ func handleSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	command := r.PostFormValue("command")
+	// Parse the JSON data from the request body
+	var cmd Command
+	if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "Invalid JSON format")
+		return
+	}
+
+	// Extract the command from the parsed JSON
+	command := cmd.Command
+
+	// Split the command into parts
 	parts := strings.Fields(command)
 
 	if len(parts) < 3 || strings.ToUpper(parts[0]) != "SET" {
@@ -43,12 +59,10 @@ func handleSet(w http.ResponseWriter, r *http.Request) {
 
 	key := parts[1]
 	value := parts[2]
-
 	// Check if expiration time is provided
 	var expirationTime time.Time
 	if len(parts) > 3 {
 		expirationStr := parts[4]
-		//parse the expiration time
 		expiration, err := strconv.Atoi(expirationStr)
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -63,7 +77,7 @@ func handleSet(w http.ResponseWriter, r *http.Request) {
 	data[key] = Item{Value: value, Expiration: expirationTime}
 	mutex.Unlock()
 
-	fmt.Fprintf(w, "Key set successfully")
+	fmt.Fprintf(w, "Key  set successfully")
 }
 
 func handleGet(w http.ResponseWriter, r *http.Request) {
