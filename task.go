@@ -62,22 +62,77 @@ func handleSet(w http.ResponseWriter, r *http.Request) {
 	// Check if expiration time is provided
 	var expirationTime time.Time
 	if len(parts) > 3 {
-		expirationStr := parts[4]
-		expiration, err := strconv.Atoi(expirationStr)
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			fmt.Fprintf(w, "Invalid expiration time")
-			return
+		//If only expiry condition is mentioned
+		if len(parts) == 5 {
+			expirationStr := parts[4]
+			expiration, err := strconv.Atoi(expirationStr)
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprintf(w, "Invalid expiration time")
+				return
+			}
+			expirationTime = time.Now().Add(time.Duration(expiration) * time.Second)
+
+			// Store the key-value pair with expiration in the database
+			mutex.Lock()
+			data[key] = Item{Value: value, Expiration: expirationTime}
+			mutex.Unlock()
+
+			fmt.Fprintf(w, "Key  set successfully")
+		} else {
+			//if optional condition also mentioned
+			condition := parts[5]
+			//If NX condition is provided
+			if condition == "NX" {
+				item, found := data[key]
+				//checking if they key does not exisits or has expired
+				if !found || time.Now().After(item.Expiration) {
+					expirationStr := parts[4]
+					expiration, err := strconv.Atoi(expirationStr)
+					if err != nil {
+						w.WriteHeader(http.StatusBadRequest)
+						fmt.Fprintf(w, "Invalid expiration time")
+						return
+					}
+					expirationTime = time.Now().Add(time.Duration(expiration) * time.Second)
+
+					// Store the key-value pair with expiration in the database
+					mutex.Lock()
+					data[key] = Item{Value: value, Expiration: expirationTime}
+					mutex.Unlock()
+
+					fmt.Fprintf(w, "Key  set successfully")
+				} else {
+					fmt.Fprintf(w, "Key  was already present successfully")
+				}
+			} else {
+				//If XX condition is provided
+				item, found := data[key]
+				if found || time.Now().Before(item.Expiration) || time.Now().Equal(item.Expiration) {
+					expirationStr := parts[4]
+					expiration, err := strconv.Atoi(expirationStr)
+					if err != nil {
+						w.WriteHeader(http.StatusBadRequest)
+						fmt.Fprintf(w, "Invalid expiration time")
+						return
+					}
+					expirationTime = time.Now().Add(time.Duration(expiration) * time.Second)
+
+					// Store the key-value pair with expiration in the database
+					mutex.Lock()
+					data[key] = Item{Value: value, Expiration: expirationTime}
+					mutex.Unlock()
+				}
+			}
 		}
-		expirationTime = time.Now().Add(time.Duration(expiration) * time.Second)
+
+	} else {
+		// Store the key-value pair with expiration in the database
+		mutex.Lock()
+		data[key] = Item{Value: value, Expiration: expirationTime}
+		mutex.Unlock()
 	}
 
-	// Store the key-value pair with expiration in the database
-	mutex.Lock()
-	data[key] = Item{Value: value, Expiration: expirationTime}
-	mutex.Unlock()
-
-	fmt.Fprintf(w, "Key  set successfully")
 }
 
 func handleGet(w http.ResponseWriter, r *http.Request) {
@@ -105,5 +160,5 @@ func handleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Fprintf(w, "Key: %s, Value: %s", key, item.Value)
+	fmt.Fprintf(w, "Key: %s, Value: %s,Time: %s", key, item.Value, item.Expiration)
 }
