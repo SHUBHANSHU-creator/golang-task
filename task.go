@@ -392,6 +392,7 @@ func parseValues(valueStr string) []int {
 //commads tou can use
 // {
 //     "command":"SET b 4 EX 60 NX/XX/or empty"
+//     "command":"GET b"
 // 	   "command":"QPUSH list_a 1 2 3"
 // 		"command":"QPOP list_a"
 //		"command":"BQPOP list_a 10"
