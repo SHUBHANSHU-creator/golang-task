@@ -157,7 +157,7 @@ func handleSet(w http.ResponseWriter, r *http.Request) {
 		}
 
 	} else {
-		// Store the key-value pair with expiration in the database
+		// Store the key-value pair without expiration in the database
 		mutex.Lock()
 		data[key] = Item{Value: value, Expiration: expirationTime}
 		mutex.Unlock()
