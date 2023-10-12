@@ -1,5 +1,6 @@
 task.go is the main file containing all the routes
 The server will run at port 8080
+To run: just type "go run task.go" in the terminal
 url for postman:  http://localhost:8080/
 
 There are 5 routes
