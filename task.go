@@ -11,9 +11,11 @@ import (
 )
 
 var (
-	data     = make(map[string]Item)
-	arrayMap = make(map[string][]int)
-	mutex    sync.RWMutex
+	//data map used to store the key value pairs
+	data = make(map[string]Item)
+	//Queue data structure made
+	Queue = make(map[string][]int)
+	mutex sync.RWMutex
 )
 
 type Command struct {
@@ -52,7 +54,6 @@ func main() {
 	http.HandleFunc("/get", handleGet)
 	http.HandleFunc("/qpop", handleQPOP)
 	http.HandleFunc("/bqpop", handleBQPOP)
-	// cond = sync.NewCond(&mutex)
 	http.ListenAndServe(":8080", nil)
 }
 
@@ -160,18 +161,39 @@ func handleSet(w http.ResponseWriter, r *http.Request) {
 		mutex.Lock()
 		data[key] = Item{Value: value, Expiration: expirationTime}
 		mutex.Unlock()
+		fmt.Fprintf(w, "Key  set successfully")
 	}
 
 }
 
 func handleGet(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		fmt.Fprintf(w, "Method not allowed")
 		return
 	}
 
-	key := r.URL.Query().Get("key")
+	// Parse the JSON data from the request body
+	var cmd Command
+	if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "Invalid JSON format")
+		return
+	}
+
+	// Extract the command from the parsed JSON
+	command := cmd.Command
+
+	// Split the command into parts
+	parts := strings.Fields(command)
+
+	if len(parts) != 2 || strings.ToUpper(parts[0]) != "GET" {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "Invalid command format")
+		return
+	}
+
+	key := parts[1]
 
 	mutex.RLock()
 	item, found := data[key]
@@ -215,13 +237,13 @@ func handleQPOP(w http.ResponseWriter, r *http.Request) {
 	defer mutex.Unlock()
 
 	// Check if the array already exists in the map
-	existingArray, exists := arrayMap[key]
+	existingArray, exists := Queue[key]
 	if exists {
 		// Pop the last value from the existing array
 		var poppedValue int
 		if len(existingArray) > 0 {
 			poppedValue, existingArray = existingArray[len(existingArray)-1], existingArray[:len(existingArray)-1]
-			arrayMap[key] = existingArray
+			Queue[key] = existingArray
 		} else {
 			w.WriteHeader(http.StatusBadRequest)
 			fmt.Fprintf(w, "Array is empty")
@@ -266,10 +288,10 @@ func handleBQPOP(w http.ResponseWriter, r *http.Request) {
 
 	key := parts[1]
 	mutex.Lock()
-	array, exists := arrayMap[key]
+	array, exists := Queue[key]
 	if !exists {
 		createArray(key)
-		array = arrayMap[key]
+		array = Queue[key]
 	}
 	mutex.Unlock()
 
@@ -284,7 +306,7 @@ func handleBQPOP(w http.ResponseWriter, r *http.Request) {
 		defer mutex.Unlock()
 		if len(array) > 0 {
 			value := array[len(array)-1]
-			arrayMap[key] = array[:len(array)-1]
+			Queue[key] = array[:len(array)-1]
 			ch <- value
 		} else {
 			ch <- nil
@@ -308,7 +330,7 @@ func handleBQPOP(w http.ResponseWriter, r *http.Request) {
 }
 
 func createArray(key string) {
-	arrayMap[key] = make([]int, 0)
+	Queue[key] = make([]int, 0)
 }
 
 func handleQPUSH(w http.ResponseWriter, r *http.Request) {
@@ -342,16 +364,16 @@ func handleQPUSH(w http.ResponseWriter, r *http.Request) {
 	values := parseValues(valueStr)
 
 	mutex.Lock()
-	array, exists := arrayMap[key]
+	array, exists := Queue[key]
 	if !exists {
 		createArray(key)
-		array = arrayMap[key]
+		array = Queue[key]
 	}
 	array = append(array, values...)
-	arrayMap[key] = array
+	Queue[key] = array
 
 	mutex.Unlock()
-	fmt.Fprintf(w, "Values appended to array %s: %v", key, arrayMap[key])
+	fmt.Fprintf(w, "Values appended to array %s: %v", key, Queue[key])
 }
 
 func parseValues(valueStr string) []int {
@@ -367,8 +389,10 @@ func parseValues(valueStr string) []int {
 	return values
 }
 
+//commads tou can use
 // {
-//     "command":"SET b 4 EX 60 NX"
+//     "command":"SET b 4 EX 60 NX/XX/or empty"
 // 	   "command":"QPUSH list_a 1 2 3"
 // 		"command":"QPOP list_a"
+//		"command":"BQPOP list_a 10"
 // }
