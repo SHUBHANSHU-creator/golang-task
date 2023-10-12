@@ -11,8 +11,9 @@ import (
 )
 
 var (
-	data  = make(map[string]Item)
-	mutex sync.RWMutex
+	data     = make(map[string]Item)
+	arrayMap = make(map[string][]int)
+	mutex    sync.RWMutex
 )
 
 type Command struct {
@@ -24,9 +25,34 @@ type Item struct {
 	Expiration time.Time
 }
 
+type QPushCommand struct {
+	Command string `json:"command"`
+}
+
+type QPopCommand struct {
+	Command string `json:"command"`
+}
+
+type QPopResponse struct {
+	Value int `json:"value"`
+}
+
+type BQPopCommand struct {
+	Command string  `json:"command"`
+	Timeout float64 `json:"timeout"`
+}
+
+type BQPopResponse struct {
+	Value interface{} `json:"value"`
+}
+
 func main() {
 	http.HandleFunc("/set", handleSet)
+	http.HandleFunc("/qpush", handleQPUSH)
 	http.HandleFunc("/get", handleGet)
+	http.HandleFunc("/qpop", handleQPOP)
+	http.HandleFunc("/bqpop", handleBQPOP)
+	// cond = sync.NewCond(&mutex)
 	http.ListenAndServe(":8080", nil)
 }
 
@@ -122,6 +148,9 @@ func handleSet(w http.ResponseWriter, r *http.Request) {
 					mutex.Lock()
 					data[key] = Item{Value: value, Expiration: expirationTime}
 					mutex.Unlock()
+					fmt.Fprintf(w, "Key  set successfully")
+				} else {
+					fmt.Fprintf(w, "Key  was not present")
 				}
 			}
 		}
@@ -162,3 +191,184 @@ func handleGet(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Fprintf(w, "Key: %s, Value: %s,Time: %s", key, item.Value, item.Expiration)
 }
+
+func handleQPOP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		fmt.Fprintf(w, "Method not allowed")
+		return
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	var command QPopCommand
+
+	err := decoder.Decode(&command)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "Invalid JSON format")
+		return
+	}
+	parts := strings.Fields(command.Command)
+	key := parts[1]
+
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	// Check if the array already exists in the map
+	existingArray, exists := arrayMap[key]
+	if exists {
+		// Pop the last value from the existing array
+		var poppedValue int
+		if len(existingArray) > 0 {
+			poppedValue, existingArray = existingArray[len(existingArray)-1], existingArray[:len(existingArray)-1]
+			arrayMap[key] = existingArray
+		} else {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprintf(w, "Array is empty")
+			return
+		}
+
+		response := QPopResponse{Value: poppedValue}
+		jsonResponse, _ := json.Marshal(response)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(jsonResponse)
+	} else {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "Array not found for key: %s", key)
+	}
+}
+
+func handleBQPOP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		fmt.Fprintf(w, "Method not allowed")
+		return
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	var command BQPopCommand
+
+	err := decoder.Decode(&command)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "Invalid JSON format")
+		return
+	}
+
+	parts := strings.Fields(command.Command)
+
+	if len(parts) != 3 || strings.ToUpper(parts[0]) != "BQPOP" {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "Invalid command format")
+		return
+	}
+
+	key := parts[1]
+	mutex.Lock()
+	array, exists := arrayMap[key]
+	if !exists {
+		createArray(key)
+		array = arrayMap[key]
+	}
+	mutex.Unlock()
+
+	fmt.Println(key, array)
+	timeoutDuration := time.Duration(int(command.Timeout*1000)) * time.Millisecond
+
+	// Use a channel to synchronize access to the queue with timeout
+	ch := make(chan interface{}, 1)
+
+	go func() {
+		mutex.Lock()
+		defer mutex.Unlock()
+		if len(array) > 0 {
+			value := array[len(array)-1]
+			arrayMap[key] = array[:len(array)-1]
+			ch <- value
+		} else {
+			ch <- nil
+		}
+	}()
+
+	select {
+	case value := <-ch:
+		response := BQPopResponse{Value: value}
+		jsonResponse, _ := json.Marshal(response)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(jsonResponse)
+	case <-time.After(timeoutDuration):
+		response := BQPopResponse{Value: nil}
+		jsonResponse, _ := json.Marshal(response)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(jsonResponse)
+	}
+}
+
+func createArray(key string) {
+	arrayMap[key] = make([]int, 0)
+}
+
+func handleQPUSH(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		fmt.Fprintf(w, "Method not allowed")
+		return
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	var command QPushCommand
+
+	err := decoder.Decode(&command)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "Invalid JSON format")
+		return
+	}
+
+	parts := strings.Fields(command.Command)
+
+	if len(parts) < 3 || strings.ToUpper(parts[0]) != "QPUSH" {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "Invalid command format")
+		return
+	}
+
+	key := parts[1]
+	valueStr := strings.Join(parts[2:], " ")
+
+	values := parseValues(valueStr)
+
+	mutex.Lock()
+	array, exists := arrayMap[key]
+	if !exists {
+		createArray(key)
+		array = arrayMap[key]
+	}
+	array = append(array, values...)
+	arrayMap[key] = array
+
+	mutex.Unlock()
+	fmt.Fprintf(w, "Values appended to array %s: %v", key, arrayMap[key])
+}
+
+func parseValues(valueStr string) []int {
+	parts := strings.Fields(valueStr)
+	values := make([]int, 0, len(parts))
+
+	for _, part := range parts {
+		if intValue, err := strconv.Atoi(part); err == nil {
+			values = append(values, intValue)
+		}
+	}
+
+	return values
+}
+
+// {
+//     "command":"SET b 4 EX 60 NX"
+// 	   "command":"QPUSH list_a 1 2 3"
+// 		"command":"QPOP list_a"
+// }
